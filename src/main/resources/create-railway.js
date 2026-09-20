@@ -36,6 +36,14 @@
       this.signalMarkers = new Map();
       this.segmentMarkers = new Map();
       this.trainMarkers = new Map();
+      this.trainById = new Map();
+      this.selectedTrainId = null;
+      this.blueMap3DDetected = false;
+      this.trainLabelTouched = false;
+      this.blueMap3DMeshes = [];
+      this.toggleInputs = new Map();
+      this.listeners = new AbortController();
+      this.raycaster = api?.Three?.Raycaster ? new api.Three.Raycaster() : null;
       this.visibility = {
         stations: true,
         signals: true,
@@ -62,6 +70,7 @@
 
       this.controls = this.createControls();
       document.body.append(this.controls);
+      this.bindBlueMap3DInteractions();
       this.applyVisibility();
       this.loop();
     }
@@ -100,8 +109,10 @@
         const input = document.createElement("input");
         input.type = "checkbox";
         input.checked = this.visibility[key];
+        this.toggleInputs.set(key, input);
         input.addEventListener("change", () => {
           this.visibility[key] = input.checked;
+          if (key === "trains") this.trainLabelTouched = true;
           this.applyVisibility();
         });
         const span = document.createElement("span");
@@ -127,6 +138,11 @@
         legend.append(item);
       }
       panel.append(legend);
+
+      this.selectionElement = document.createElement("div");
+      this.selectionElement.className = "create-railway-selection";
+      this.selectionElement.hidden = true;
+      panel.append(this.selectionElement);
 
       this.statusElement = document.createElement("div");
       this.statusElement.className = "create-railway-controls__status";
@@ -154,9 +170,7 @@
         if (visible && !attached) this.root.add(set);
         if (!visible && attached) this.root.remove(set);
       }
-      for (const marker of this.segmentMarkers.values()) {
-        marker.line.visible = marker.__status !== "PASSIVE" || this.visibility.passive;
-      }
+      for (const marker of this.segmentMarkers.values()) this.styleSegment(marker);
     }
 
     async loop() {
@@ -164,6 +178,7 @@
         const nextDimension = this.currentDimension();
         if (nextDimension !== this.dimension) {
           this.dimension = nextDimension;
+          this.clearSelection();
           this.clearAll();
         }
         await this.refresh();
@@ -192,8 +207,9 @@
         this.failedFetches = 0;
         const age = Math.max(0, Date.now() - Number(state.generatedAt || Date.now()));
         const stale = age > this.pollMs * 4 ? " · stale" : "";
+        const linked = this.blueMap3DDetected ? " · 3D linked" : "";
         this.setStatus(
-          `${data.trains?.length || 0} trains · ${data.stations?.length || 0} stations · ${data.signals?.length || 0} signals${stale}`,
+          `${data.trains?.length || 0} trains · ${data.stations?.length || 0} stations · ${data.signals?.length || 0} signals${linked}${stale}`,
         );
       } catch (error) {
         this.failedFetches++;
@@ -207,6 +223,8 @@
       this.renderSignals(data.signals || []);
       this.renderSegments(data.segments || []);
       this.renderTrains(data.trains || []);
+      this.syncBlueMap3DMeshes();
+      this.renderSelectedTrain();
       this.applyVisibility();
     }
 
@@ -290,28 +308,47 @@
         if (!marker) {
           marker = new this.api.LineMarker(`segment-${segment.id}`);
           marker.line.depthTest = false;
-          marker.line.linewidth = 4;
-          marker.line.opacity = 0.82;
           marker.setLine(segment.points.flatMap((point) => [point.x, point.y, point.z]));
           this.segments.add(marker);
           this.segmentMarkers.set(segment.id, marker);
         }
-        const status = safeText(segment.status, "FREE").toUpperCase();
-        marker.__status = status;
-        marker.line.color.setStyle(STATUS_COLORS[status] || STATUS_COLORS.FREE);
-        marker.line.opacity = status === "PASSIVE" ? 0.28 : 0.82;
-        marker.line.linewidth = status === "OCCUPIED" ? 6 : status === "RESERVED" ? 5 : 4;
-        marker.line.visible = status !== "PASSIVE" || this.visibility.passive;
+        marker.__status = safeText(segment.status, "FREE").toUpperCase();
+        marker.__trainIds = segment.trainIds || [];
         marker.line.userData.createRailway = {
-          status,
+          status: marker.__status,
           group: segment.group,
           trains: segment.trains || [],
+          trainIds: marker.__trainIds,
         };
+        this.styleSegment(marker);
       }
       this.removeMissing(this.segmentMarkers, this.segments, keep);
     }
 
+    styleSegment(marker) {
+      const status = marker.__status || "FREE";
+      const selected =
+        this.selectedTrainId && (marker.__trainIds || []).includes(this.selectedTrainId);
+      marker.line.color.setStyle(STATUS_COLORS[status] || STATUS_COLORS.FREE);
+      marker.line.opacity = selected ? 1 : status === "PASSIVE" ? 0.28 : 0.82;
+      marker.line.linewidth = selected
+        ? 9
+        : status === "OCCUPIED"
+          ? 6
+          : status === "RESERVED"
+            ? 5
+            : 4;
+      marker.line.visible =
+        selected || status !== "PASSIVE" || this.visibility.passive;
+      marker.line.renderOrder = selected ? 120 : 100;
+    }
+
     renderTrains(trains) {
+      this.trainById = new Map(trains.map((train) => [train.id, train]));
+      if (this.selectedTrainId && !this.trainById.has(this.selectedTrainId)) {
+        this.clearSelection();
+      }
+
       const keep = new Set();
       for (const train of trains) {
         keep.add(train.id);
@@ -328,48 +365,218 @@
           label.className = "create-railway-train__label";
           marker.element.append(glyph, label);
           this.bindTooltip(marker.element, () => marker.__tooltip);
+          marker.element.addEventListener("click", (event) => {
+            event.stopPropagation();
+            this.selectTrain(train.id);
+          });
           this.trains.add(marker);
           this.trainMarkers.set(train.id, marker);
         }
         marker.element.querySelector(".create-railway-train__label").textContent =
           safeText(train.name, "Train");
         marker.element.dataset.state = safeText(train.state, "RUNNING");
-        marker.__tooltip = [
-          safeText(train.name, "Train"),
-          `${formatSpeed(train.speed)} · ${formatState(train.state)}`,
-          train.currentStation ? `At ${train.currentStation}` : null,
-          !train.currentStation && train.targetStation
-            ? `→ ${train.targetStation}${train.targetDistance ? ` · ${train.targetDistance} m` : ""}`
-            : null,
-          train.waitingForSignal ? "Waiting at signal" : null,
-          train.owner ? `Driver: ${train.owner}` : null,
-          `${train.carriages || 0} carriage${train.carriages === 1 ? "" : "s"}`,
-        ]
-          .filter(Boolean)
-          .join("\n");
+        marker.element.classList.toggle("selected", this.selectedTrainId === train.id);
+        marker.__tooltip = this.trainTooltip(train);
         marker.element.setAttribute("aria-label", marker.__tooltip);
         marker.position.set(train.x, train.y, train.z);
       }
       this.removeMissing(this.trainMarkers, this.trains, keep);
     }
 
+    trainTooltip(train) {
+      return [
+        safeText(train.name, "Train"),
+        `${formatSpeed(train.speed)} · ${formatState(train.state)}`,
+        train.currentStation ? `At ${train.currentStation}` : null,
+        !train.currentStation && train.targetStation
+          ? `→ ${train.targetStation}${train.targetDistance ? ` · ${train.targetDistance} m` : ""}`
+          : null,
+        train.waitingForSignal ? "Waiting at signal" : null,
+        train.owner ? `Driver: ${train.owner}` : null,
+        `${train.carriages || 0} carriage${train.carriages === 1 ? "" : "s"}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+
+    syncBlueMap3DMeshes() {
+      const objects = window.__bluemap3d?.objects;
+      if (!objects) {
+        this.blueMap3DMeshes = [];
+        return;
+      }
+
+      const meshes = [];
+      for (const [objectId, entry] of Object.entries(objects)) {
+        if (!objectId.startsWith("create_contraptions/") || !entry?.mesh) continue;
+        const parts = objectId.split("/");
+        if (parts.length < 4) continue;
+        const trainId = parts.at(-2);
+        const carriage = Number(parts.at(-1));
+        if (!this.trainById.has(trainId) || !Number.isInteger(carriage)) continue;
+
+        entry.mesh.userData.createRailwayTrainId = trainId;
+        entry.mesh.userData.createRailwayCarriage = carriage;
+        meshes.push(entry.mesh);
+      }
+      this.blueMap3DMeshes = meshes;
+
+      if (meshes.length && !this.blueMap3DDetected) {
+        this.blueMap3DDetected = true;
+        if (!this.trainLabelTouched) {
+          this.visibility.trains = false;
+          const input = this.toggleInputs.get("trains");
+          if (input) input.checked = false;
+        }
+        console.info(
+          "[Create Railway] linked",
+          meshes.length,
+          "BlueMap3D carriage mesh(es) to railway telemetry",
+        );
+      }
+    }
+
+    bindBlueMap3DInteractions() {
+      const canvas = this.app.mapViewer?.renderer?.domElement;
+      if (!canvas || !this.raycaster || !this.api?.Three?.Vector2) return;
+
+      canvas.addEventListener(
+        "pointermove",
+        (event) => {
+          if (event.buttons || event.pointerType === "touch") return;
+          const train = this.pickBlueMap3DTrain(event);
+          if (!train) {
+            if (this.tooltip.dataset.source === "bluemap3d") this.tooltip.hidden = true;
+            canvas.style.cursor = "";
+            return;
+          }
+          canvas.style.cursor = "pointer";
+          this.showTooltip(this.trainTooltip(train), event, "bluemap3d");
+        },
+        { signal: this.listeners.signal },
+      );
+
+      canvas.addEventListener(
+        "click",
+        (event) => {
+          const train = this.pickBlueMap3DTrain(event);
+          if (train) this.selectTrain(train.id);
+        },
+        { signal: this.listeners.signal },
+      );
+
+      canvas.addEventListener(
+        "pointerleave",
+        () => {
+          if (this.tooltip.dataset.source === "bluemap3d") this.tooltip.hidden = true;
+          canvas.style.cursor = "";
+        },
+        { signal: this.listeners.signal },
+      );
+    }
+
+    pickBlueMap3DTrain(event) {
+      this.syncBlueMap3DMeshes();
+      if (!this.blueMap3DMeshes.length) return null;
+
+      const canvas = this.app.mapViewer.renderer.domElement;
+      const bounds = canvas.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return null;
+
+      const pointer = new this.api.Three.Vector2(
+        ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
+        -((event.clientY - bounds.top) / bounds.height) * 2 + 1,
+      );
+      this.raycaster.setFromCamera(pointer, this.app.mapViewer.camera);
+      const hits = this.raycaster.intersectObjects(this.blueMap3DMeshes, true);
+      for (const hit of hits) {
+        let object = hit.object;
+        while (object) {
+          const trainId = object.userData?.createRailwayTrainId;
+          if (trainId && this.trainById.has(trainId)) return this.trainById.get(trainId);
+          object = object.parent;
+        }
+      }
+      return null;
+    }
+
+    selectTrain(trainId) {
+      if (!this.trainById.has(trainId)) return;
+      this.selectedTrainId = trainId;
+      for (const marker of this.segmentMarkers.values()) this.styleSegment(marker);
+      for (const [id, marker] of this.trainMarkers) {
+        marker.element.classList.toggle("selected", id === trainId);
+      }
+      this.renderSelectedTrain();
+    }
+
+    clearSelection() {
+      this.selectedTrainId = null;
+      for (const marker of this.segmentMarkers.values()) this.styleSegment(marker);
+      for (const marker of this.trainMarkers.values()) marker.element.classList.remove("selected");
+      this.renderSelectedTrain();
+    }
+
+    renderSelectedTrain() {
+      if (!this.selectionElement) return;
+      const train = this.selectedTrainId ? this.trainById.get(this.selectedTrainId) : null;
+      if (!train) {
+        this.selectionElement.replaceChildren();
+        this.selectionElement.hidden = true;
+        return;
+      }
+
+      const header = document.createElement("div");
+      header.className = "create-railway-selection__header";
+      const title = document.createElement("strong");
+      title.textContent = safeText(train.name, "Train");
+      const close = document.createElement("button");
+      close.type = "button";
+      close.textContent = "×";
+      close.setAttribute("aria-label", "Clear selected train");
+      close.addEventListener("click", () => this.clearSelection());
+      header.append(title, close);
+
+      const body = document.createElement("div");
+      body.className = "create-railway-selection__body";
+      body.textContent = this.trainTooltip(train).split("\n").slice(1).join("\n");
+
+      const occupied = [...this.segmentMarkers.values()].filter((marker) =>
+        (marker.__trainIds || []).includes(train.id),
+      ).length;
+      if (occupied) {
+        const blocks = document.createElement("small");
+        blocks.textContent = `${occupied} occupied signal section${occupied === 1 ? "" : "s"} highlighted`;
+        body.append(document.createElement("br"), blocks);
+      }
+
+      this.selectionElement.replaceChildren(header, body);
+      this.selectionElement.hidden = false;
+    }
+
+    showTooltip(value, event, source = "marker") {
+      if (!value) return;
+      this.tooltip.textContent = value;
+      this.tooltip.dataset.source = source;
+      this.tooltip.hidden = false;
+      const fallback = event?.currentTarget?.getBoundingClientRect?.();
+      const x = event?.clientX || fallback?.right || 8;
+      const y = event?.clientY || fallback?.top || 8;
+      this.tooltip.style.left = `${Math.max(8, Math.min(x + 12, innerWidth - this.tooltip.offsetWidth - 8))}px`;
+      this.tooltip.style.top = `${Math.max(8, Math.min(y + 12, innerHeight - this.tooltip.offsetHeight - 8))}px`;
+    }
+
     bindTooltip(element, text) {
-      const show = (event) => {
-        const value = text();
-        if (!value) return;
-        this.tooltip.textContent = value;
-        this.tooltip.hidden = false;
-        const bounds = element.getBoundingClientRect();
-        const x = event?.clientX || bounds.right;
-        const y = event?.clientY || bounds.top;
-        this.tooltip.style.left = `${Math.max(8, Math.min(x + 12, innerWidth - this.tooltip.offsetWidth - 8))}px`;
-        this.tooltip.style.top = `${Math.max(8, Math.min(y + 12, innerHeight - this.tooltip.offsetHeight - 8))}px`;
-      };
+      const show = (event) => this.showTooltip(text(), event, "marker");
       element.addEventListener("pointerenter", show);
       element.addEventListener("pointermove", show);
-      element.addEventListener("pointerleave", () => (this.tooltip.hidden = true));
+      element.addEventListener("pointerleave", () => {
+        if (this.tooltip.dataset.source === "marker") this.tooltip.hidden = true;
+      });
       element.addEventListener("focus", show);
-      element.addEventListener("blur", () => (this.tooltip.hidden = true));
+      element.addEventListener("blur", () => {
+        if (this.tooltip.dataset.source === "marker") this.tooltip.hidden = true;
+      });
     }
 
     removeMissing(map, set, keep) {
@@ -390,6 +597,8 @@
       this.clearSet(this.signalMarkers, this.signals);
       this.clearSet(this.segmentMarkers, this.segments);
       this.clearSet(this.trainMarkers, this.trains);
+      this.trainById.clear();
+      this.blueMap3DMeshes = [];
     }
 
     setStatus(text) {
@@ -398,6 +607,7 @@
 
     dispose() {
       this.disposed = true;
+      this.listeners.abort();
       this.clearAll();
       this.app.popupMarkerSet.remove(this.root);
       this.tooltip.remove();
