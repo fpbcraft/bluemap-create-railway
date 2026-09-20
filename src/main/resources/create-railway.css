@@ -189,3 +189,51 @@
     display: none;
   }
 }
+
+
+.create-railway-selection {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.create-railway-selection__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.create-railway-selection__header strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.create-railway-selection__header button {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f8fafc;
+  font: 18px/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.create-railway-selection__body {
+  margin-top: 5px;
+  color: #cbd5e1;
+  white-space: pre-line;
+  font-size: 11px;
+}
+
+.create-railway-selection__body small {
+  color: #93c5fd;
+}
+
+.create-railway-train.selected .create-railway-train__glyph {
+  outline: 2px solid #93c5fd;
+  outline-offset: 2px;
+}
