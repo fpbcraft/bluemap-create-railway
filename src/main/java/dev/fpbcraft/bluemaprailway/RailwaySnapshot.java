@@ -182,6 +182,14 @@ final class RailwaySnapshot {
                       .map(train -> train.id.toString())
                       .sorted()
                       .toList();
+          dto.reservedTrainIds =
+              groupId == null
+                  ? List.of()
+                  : Create.RAILWAYS.trains.values().stream()
+                      .filter(train -> train.reservedSignalBlocks.contains(groupId))
+                      .map(train -> train.id.toString())
+                      .sorted()
+                      .toList();
           dto.points = sample(edge, graph, start, end);
           snapshot.dimension(dimension).segments.add(dto);
         }
@@ -359,6 +367,7 @@ final class RailwaySnapshot {
     boolean fallback;
     List<String> trains;
     List<String> trainIds;
+    List<String> reservedTrainIds;
     List<PointDto> points;
   }
 
