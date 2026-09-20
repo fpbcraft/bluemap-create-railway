@@ -314,11 +314,13 @@
         }
         marker.__status = safeText(segment.status, "FREE").toUpperCase();
         marker.__trainIds = segment.trainIds || [];
+        marker.__reservedTrainIds = segment.reservedTrainIds || [];
         marker.line.userData.createRailway = {
           status: marker.__status,
           group: segment.group,
           trains: segment.trains || [],
           trainIds: marker.__trainIds,
+          reservedTrainIds: marker.__reservedTrainIds,
         };
         this.styleSegment(marker);
       }
@@ -327,9 +329,17 @@
 
     styleSegment(marker) {
       const status = marker.__status || "FREE";
-      const selected =
+      const occupiedBySelected =
         this.selectedTrainId && (marker.__trainIds || []).includes(this.selectedTrainId);
-      marker.line.color.setStyle(STATUS_COLORS[status] || STATUS_COLORS.FREE);
+      const reservedBySelected =
+        this.selectedTrainId &&
+        (marker.__reservedTrainIds || []).includes(this.selectedTrainId);
+      const selected = occupiedBySelected || reservedBySelected;
+      marker.line.color.setStyle(
+        reservedBySelected && !occupiedBySelected
+          ? STATUS_COLORS.RESERVED
+          : STATUS_COLORS[status] || STATUS_COLORS.FREE,
+      );
       marker.line.opacity = selected ? 1 : status === "PASSIVE" ? 0.28 : 0.82;
       marker.line.linewidth = selected
         ? 9
@@ -544,9 +554,21 @@
       const occupied = [...this.segmentMarkers.values()].filter((marker) =>
         (marker.__trainIds || []).includes(train.id),
       ).length;
-      if (occupied) {
+      const reserved = [...this.segmentMarkers.values()].filter((marker) =>
+        (marker.__reservedTrainIds || []).includes(train.id),
+      ).length;
+      if (occupied || reserved) {
         const blocks = document.createElement("small");
-        blocks.textContent = `${occupied} occupied signal section${occupied === 1 ? "" : "s"} highlighted`;
+        const details = [];
+        if (occupied)
+          details.push(
+            `${occupied} occupied section${occupied === 1 ? "" : "s"}`,
+          );
+        if (reserved)
+          details.push(
+            `${reserved} reserved-ahead section${reserved === 1 ? "" : "s"}`,
+          );
+        blocks.textContent = `${details.join(" · ")} highlighted`;
         body.append(document.createElement("br"), blocks);
       }
 
