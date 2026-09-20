@@ -1,0 +1,191 @@
+.create-railway-controls {
+  position: fixed;
+  z-index: 10020;
+  top: 72px;
+  right: 16px;
+  font: 500 13px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #f7fafc;
+}
+
+.create-railway-controls__button {
+  display: block;
+  margin-left: auto;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(18, 22, 28, 0.88);
+  color: inherit;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+}
+
+.create-railway-controls__panel {
+  width: 210px;
+  margin-top: 8px;
+  padding: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  background: rgba(18, 22, 28, 0.92);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32);
+  backdrop-filter: blur(10px);
+}
+
+.create-railway-controls__heading {
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.create-railway-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  cursor: pointer;
+}
+
+.create-railway-toggle input {
+  accent-color: #53d769;
+}
+
+.create-railway-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  color: #cbd5e1;
+  font-size: 11px;
+}
+
+.create-railway-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.create-railway-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.create-railway-controls__status {
+  margin-top: 8px;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.create-railway-station,
+.create-railway-train,
+.create-railway-signal {
+  position: relative;
+  pointer-events: auto;
+  user-select: none;
+  cursor: default;
+}
+
+.create-railway-station {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.7));
+}
+
+.create-railway-station__icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 2px solid #f8fafc;
+  border-radius: 6px;
+  background: #1f2937;
+  color: #f8fafc;
+  font: 800 13px/1 system-ui, sans-serif;
+}
+
+.create-railway-station__name,
+.create-railway-train__label {
+  max-width: 180px;
+  overflow: hidden;
+  padding: 3px 6px;
+  border-radius: 5px;
+  background: rgba(15, 23, 42, 0.9);
+  color: #f8fafc;
+  font: 600 12px/1.2 system-ui, sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.create-railway-signal {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(12, 18, 24, 0.95);
+  border-radius: 999px;
+  background: var(--signal-color, #9ca3af);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.32),
+    0 0 7px var(--signal-color, #9ca3af);
+}
+
+.create-railway-train {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transform: translateY(-6px);
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.75));
+}
+
+.create-railway-train__glyph {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  border-radius: 5px;
+  background: #111827;
+  color: #93c5fd;
+  font-size: 13px;
+}
+
+.create-railway-train[data-state="DERAILED"] .create-railway-train__glyph,
+.create-railway-train[data-state="NAVIGATION_FAILED"] .create-railway-train__glyph,
+.create-railway-train[data-state="CONDUCTOR_MISSING"] .create-railway-train__glyph {
+  color: #ef5350;
+}
+
+.create-railway-train[data-state="SCHEDULE_INTERRUPTED"] .create-railway-train__glyph {
+  color: #ffd54f;
+}
+
+.create-railway-tooltip {
+  position: fixed;
+  z-index: 10040;
+  max-width: 300px;
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 7px;
+  background: rgba(10, 14, 20, 0.94);
+  color: #f8fafc;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.32);
+  white-space: pre-line;
+  pointer-events: none;
+  font: 500 12px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+@media (max-width: 700px) {
+  .create-railway-controls {
+    top: 60px;
+    right: 8px;
+  }
+
+  .create-railway-controls__panel {
+    width: min(210px, calc(100vw - 16px));
+  }
+
+  .create-railway-station__name,
+  .create-railway-train__label {
+    display: none;
+  }
+}
