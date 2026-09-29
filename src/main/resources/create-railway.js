@@ -211,7 +211,7 @@
         return;
       }
       try {
-        const response = await fetch(new URL("state.json", BASE_URL), {
+        const response = await fetch(new URL(`state.json?t=${Date.now()}`, BASE_URL), {
           cache: "no-store",
         });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
