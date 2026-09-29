@@ -21,6 +21,12 @@
   const formatSpeed = (speed) => `${Math.abs(Number(speed || 0)).toFixed(1)} b/t`;
   const formatState = (state) =>
     safeText(state, "unknown").toLowerCase().replaceAll("_", " ");
+  const formatEta = (distance, speed) => {
+    const blocksPerSecond = Math.abs(Number(speed || 0)) * 20;
+    if (!distance || blocksPerSecond < 0.05) return null;
+    const seconds = Math.ceil(Number(distance) / blocksPerSecond);
+    return seconds < 60 ? `~${seconds}s` : `~${Math.ceil(seconds / 60)}m`;
+  };
 
   class RailwayOverlay {
     constructor(app, api, integration) {
@@ -31,6 +37,7 @@
       this.pollMs = Math.max(500, Number(integration.pollIntervalMs) || 1000);
       this.dimension = null;
       this.disposed = false;
+      this.active = false;
       this.failedFetches = 0;
       this.stationMarkers = new Map();
       this.signalMarkers = new Map();
@@ -72,7 +79,7 @@
       document.body.append(this.controls);
       this.bindBlueMap3DInteractions();
       this.applyVisibility();
-      this.loop();
+      this.setStatus("Open Railway to load live telemetry");
     }
 
     currentMapId() {
@@ -152,10 +159,18 @@
       button.addEventListener("click", () => {
         panel.hidden = !panel.hidden;
         button.setAttribute("aria-expanded", String(!panel.hidden));
+        if (!panel.hidden) this.activate();
       });
 
       host.append(button, panel);
       return host;
+    }
+
+    activate() {
+      if (this.active || this.disposed) return;
+      this.active = true;
+      this.setStatus("Connecting…");
+      void this.loop();
     }
 
     applyVisibility() {
@@ -174,7 +189,11 @@
     }
 
     async loop() {
-      while (!this.disposed) {
+      while (!this.disposed && this.active) {
+        if (document.visibilityState === "hidden") {
+          await sleep(this.pollMs);
+          continue;
+        }
         const nextDimension = this.currentDimension();
         if (nextDimension !== this.dimension) {
           this.dimension = nextDimension;
@@ -219,13 +238,32 @@
     }
 
     render(data) {
-      this.renderStations(data.stations || []);
+      const trains = data.trains || [];
+      const segments = data.segments || [];
+      this.trainById = new Map(trains.map((train) => [train.id, train]));
+      this.groupInfo = this.buildGroupInfo(segments);
+      this.renderSegments(segments);
       this.renderSignals(data.signals || []);
-      this.renderSegments(data.segments || []);
-      this.renderTrains(data.trains || []);
+      this.renderTrains(trains);
+      this.renderStations(data.stations || []);
       this.syncBlueMap3DMeshes();
       this.renderSelectedTrain();
       this.applyVisibility();
+    }
+
+    buildGroupInfo(segments) {
+      const groups = new Map();
+      for (const segment of segments) {
+        if (!segment.group) continue;
+        const group = groups.get(segment.group) || {
+          trainIds: new Set(),
+          reservedTrainIds: new Set(),
+        };
+        for (const id of segment.trainIds || []) group.trainIds.add(id);
+        for (const id of segment.reservedTrainIds || []) group.reservedTrainIds.add(id);
+        groups.set(segment.group, group);
+      }
+      return groups;
     }
 
     renderStations(stations) {
@@ -250,6 +288,19 @@
         }
         marker.element.querySelector(".create-railway-station__name").textContent =
           safeText(station.name, "Station");
+        const inbound = [...this.trainById.values()]
+          .filter(
+            (train) =>
+              train.targetStation === station.name &&
+              train.currentStation !== station.name &&
+              Number(train.targetDistance) > 0,
+          )
+          .sort((a, b) => Number(a.targetDistance) - Number(b.targetDistance))
+          .slice(0, 3)
+          .map((train) => {
+            const eta = formatEta(train.targetDistance, train.speed);
+            return `Inbound: ${safeText(train.name, "Train")} · ${train.targetDistance} m${eta ? ` · ${eta}` : ""}`;
+          });
         marker.__tooltip = [
           safeText(station.name, "Station"),
           station.assembling ? "Assembly mode" : null,
@@ -257,6 +308,7 @@
           !station.presentTrain && station.imminentTrain
             ? `Approaching: ${station.imminentTrain}`
             : null,
+          ...inbound,
         ]
           .filter(Boolean)
           .join("\n");
@@ -286,10 +338,25 @@
           "--signal-color",
           SIGNAL_COLORS[state] || SIGNAL_COLORS.INVALID,
         );
+        const block = signal.group ? this.groupInfo?.get(signal.group) : null;
+        const occupied = block
+          ? [...block.trainIds]
+              .map((id) => this.trainById.get(id)?.name)
+              .filter(Boolean)
+              .join(", ")
+          : "";
+        const reserved = block
+          ? [...block.reservedTrainIds]
+              .map((id) => this.trainById.get(id)?.name)
+              .filter(Boolean)
+              .join(", ")
+          : "";
         marker.__tooltip = [
           `${formatState(signal.type)} signal · ${state.toLowerCase()}`,
           signal.powered ? "Forced by redstone" : null,
           signal.group ? `Block ${signal.group.slice(0, 8)}` : null,
+          occupied ? `Occupied by: ${occupied}` : null,
+          reserved ? `Reserved for: ${reserved}` : null,
         ]
           .filter(Boolean)
           .join("\n");
@@ -354,7 +421,6 @@
     }
 
     renderTrains(trains) {
-      this.trainById = new Map(trains.map((train) => [train.id, train]));
       if (this.selectedTrainId && !this.trainById.has(this.selectedTrainId)) {
         this.clearSelection();
       }
@@ -394,12 +460,16 @@
     }
 
     trainTooltip(train) {
+      const eta = formatEta(train.targetDistance, train.speed);
+      const targetSpeed = Math.abs(Number(train.targetSpeed || 0));
       return [
         safeText(train.name, "Train"),
         `${formatSpeed(train.speed)} · ${formatState(train.state)}`,
+        targetSpeed > 0 ? `Target speed: ${formatSpeed(targetSpeed)}` : null,
+        train.backwards ? "Direction: reverse" : "Direction: forward",
         train.currentStation ? `At ${train.currentStation}` : null,
         !train.currentStation && train.targetStation
-          ? `→ ${train.targetStation}${train.targetDistance ? ` · ${train.targetDistance} m` : ""}`
+          ? `→ ${train.targetStation}${train.targetDistance ? ` · ${train.targetDistance} m` : ""}${eta ? ` · ${eta}` : ""}`
           : null,
         train.waitingForSignal ? "Waiting at signal" : null,
         train.owner ? `Driver: ${train.owner}` : null,
@@ -486,8 +556,7 @@
     }
 
     pickBlueMap3DTrain(event) {
-      this.syncBlueMap3DMeshes();
-      if (!this.blueMap3DMeshes.length) return null;
+      if (!this.active || !this.blueMap3DMeshes.length) return null;
 
       const canvas = this.app.mapViewer.renderer.domElement;
       const bounds = canvas.getBoundingClientRect();
@@ -638,8 +707,8 @@
   }
 
   async function loadIntegration() {
-    const response = await fetch(new URL(`integration.json?t=${Date.now()}`, BASE_URL), {
-      cache: "no-store",
+    const response = await fetch(new URL("integration.json", BASE_URL), {
+      cache: "no-cache",
     });
     if (!response.ok) throw new Error(`integration.json HTTP ${response.status}`);
     return response.json();
